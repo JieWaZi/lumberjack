@@ -497,7 +497,7 @@ func TestTimeFromName(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		got, err := l.timeFromName(test.filename, prefix, ext)
+		got, err := l.timeFromName(test.filename, prefix, ext, false)
 		equals(got, test.want, t)
 		equals(err != nil, test.wantErr, t)
 	}

@@ -3,7 +3,7 @@
 // Note that this is v2.0 of lumberjack, and should be imported using gopkg.in
 // thusly:
 //
-//   import "gopkg.in/natefinch/lumberjack.v2"
+//	import "gopkg.in/natefinch/lumberjack.v2"
 //
 // The package name remains simply lumberjack, and the code resides at
 // https://github.com/natefinch/lumberjack under the v2.0 branch.
@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,7 +67,7 @@ var _ io.WriteCloser = (*Logger)(nil)
 // `/var/log/foo/server.log`, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
-// Cleaning Up Old Log Files
+// # Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
 // recent files according to the encoded timestamp will be retained, up to a
@@ -106,6 +107,9 @@ type Logger struct {
 	// Compress determines if the rotated log files should be compressed
 	// using gzip. The default is not to perform compression.
 	Compress bool `json:"compress" yaml:"compress"`
+
+	//
+	TimestampFormat bool `json:"timestampformat" yaml:"timestampformat"`
 
 	size int64
 	file *os.File
@@ -218,7 +222,12 @@ func (l *Logger) openNew() error {
 		// Copy the mode off the old logfile.
 		mode = info.Mode()
 		// move the existing file
-		newname := backupName(name, l.LocalTime)
+		var newname string
+		if l.TimestampFormat {
+			newname = backupNameWithTimestamp(name)
+		} else {
+			newname = backupName(name, l.LocalTime)
+		}
 		if err := os.Rename(name, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
@@ -256,6 +265,10 @@ func backupName(name string, local bool) string {
 
 	timestamp := t.Format(backupTimeFormat)
 	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
+}
+
+func backupNameWithTimestamp(name string) string {
+	return fmt.Sprintf("%s.%d", name, currentTime().Unix())
 }
 
 // openExistingOrNew opens the logfile if it exists and if the current write
@@ -405,16 +418,19 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 	logFiles := []logInfo{}
 
 	prefix, ext := l.prefixAndExt()
-
+	if l.TimestampFormat {
+		prefix = l.filename()
+		ext = ""
+	}
 	for _, f := range files {
 		if f.IsDir() {
 			continue
 		}
-		if t, err := l.timeFromName(f.Name(), prefix, ext); err == nil {
+		if t, err := l.timeFromName(f.Name(), prefix, ext, l.TimestampFormat); err == nil {
 			logFiles = append(logFiles, logInfo{t, f})
 			continue
 		}
-		if t, err := l.timeFromName(f.Name(), prefix, ext+compressSuffix); err == nil {
+		if t, err := l.timeFromName(f.Name(), prefix, ext+compressSuffix, l.TimestampFormat); err == nil {
 			logFiles = append(logFiles, logInfo{t, f})
 			continue
 		}
@@ -430,15 +446,25 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 // timeFromName extracts the formatted time from the filename by stripping off
 // the filename's prefix and extension. This prevents someone's filename from
 // confusing time.parse.
-func (l *Logger) timeFromName(filename, prefix, ext string) (time.Time, error) {
+func (l *Logger) timeFromName(filename, prefix, ext string, timestamp bool) (time.Time, error) {
 	if !strings.HasPrefix(filename, prefix) {
 		return time.Time{}, errors.New("mismatched prefix")
 	}
-	if !strings.HasSuffix(filename, ext) {
+	if ext != "" && !strings.HasSuffix(filename, ext) {
 		return time.Time{}, errors.New("mismatched extension")
 	}
-	ts := filename[len(prefix) : len(filename)-len(ext)]
-	return time.Parse(backupTimeFormat, ts)
+	if timestamp {
+		tss := filename[len(prefix) : len(filename)-len(ext)]
+		ts, err := strconv.ParseInt(tss, 10, 64)
+		if err != nil {
+			return time.Time{}, errors.New("timestamp error")
+		}
+		return time.Unix(ts, 0), nil
+	} else {
+		ts := filename[len(prefix) : len(filename)-len(ext)]
+		return time.Parse(backupTimeFormat, ts)
+	}
+
 }
 
 // max returns the maximum size in bytes of log files before rolling.
